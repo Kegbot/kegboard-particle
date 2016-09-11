@@ -2,7 +2,11 @@
  * kegboard-particle
  */
 
-#define REPORT_INTERVAL_MILLIS 1000
+#define VERSION "0.1.0"
+
+#define CLOUD_PUBLISH_INTERVAL_MILLIS 1000
+#define TCP_PUBLISH_INTERVAL_MILLIS 250
+#define CONSOLE_PUBLISH_INTERVAL_MILLIS 250
 
 #define NUM_METERS 4
 #define METER0_PIN D1
@@ -10,12 +14,22 @@
 #define METER2_PIN D3
 #define METER3_PIN D4
 
-// Time of last publication
-unsigned long lastReportMillis;
+#define TCP_SERVER_PORT 8321
+
+TCPServer server = TCPServer(TCP_SERVER_PORT);
+TCPClient client;
+
+volatile unsigned int cloudPending;
+unsigned long lastCloudPublishMillis;
+
+volatile unsigned int consolePending;
+unsigned long lastConsolePublishMillis;
+
+volatile unsigned int tcpPending;
+unsigned long lastTcpPublishMillis;
 
 typedef struct {
   volatile unsigned int ticks;
-  unsigned int lastPublishedTicks;
 } meter_t;
 
 meter_t meters[NUM_METERS];
@@ -24,6 +38,7 @@ meter_t meters[NUM_METERS];
   void meter##METER_NUM##Interrupt(void) { \
     detachInterrupt(METER##METER_NUM##_PIN); \
     meters[METER_NUM].ticks++; \
+    cloudPending = consolePending = tcpPending = 1; \
     attachInterrupt(METER##METER_NUM##_PIN, meter##METER_NUM##Interrupt, FALLING); \
   }
 
@@ -66,7 +81,10 @@ int publicMeterTicks(String extra) {
 
 void setup() {
   Serial.begin(115200);
-  Serial.println("start: kegboard-particle online!");
+  Serial.print("start: kegboard-particle online, ip: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();
 
   SETUP_METER(0);
   SETUP_METER(1);
@@ -77,41 +95,87 @@ void setup() {
   Particle.function("meterTicks", publicMeterTicks);
 }
 
-void publishStatus() {
-  String statusMessage = "";
-  bool changed = false;
-
+void getStatus(String* statusMessage) {
   for (int i = 0; i < NUM_METERS; i++) {
     meter_t *meter = &meters[i];
     unsigned int ticks = meter->ticks;
-    unsigned int delta = ticks - meter->lastPublishedTicks;
-    meter->lastPublishedTicks = ticks;
 
-    if (delta > 0) {
-      changed = true;
-    }
-
-    statusMessage.concat(String::format("meter%i.ticks=%u meter%i.delta=%u ",
-        i, ticks, i, delta));
+    statusMessage->concat(String::format("meter%i.ticks=%u ", i, ticks));
   }
+}
 
-  if (!changed) {
+void checkForTcpClient() {
+  if (!client.connected()) {
+    client = server.available();
+    if (client.connected()) {
+      client.print("info: kegboard-particle device_id=");
+      client.print(System.deviceID());
+      client.print(" version=");
+      client.print(VERSION);
+      client.println();
+    }
+  }
+}
+
+void publishCloudStatus() {
+  if (!cloudPending) {
     return;
   }
+  cloudPending = 0;
+
+  String statusMessage;
+  getStatus(&statusMessage);
+
+  bool published = Particle.publish("kb-status", statusMessage, PRIVATE);
+  if (published) {
+    lastCloudPublishMillis = millis();
+  }
+}
+
+void publishTcpStatus() {
+  if (!tcpPending) {
+    return;
+  }
+  tcpPending = 0;
+
+  if (client.connected()) {
+    String statusMessage;
+    getStatus(&statusMessage);
+    client.print("kb-status: ");
+    client.println(statusMessage);
+  }
+  lastTcpPublishMillis = millis();
+}
+
+void publishConsoleStatus() {
+  if (!consolePending) {
+    return;
+  }
+  consolePending = 0;
+
+  String statusMessage;
+  getStatus(&statusMessage);
 
   Serial.print("kb-status: ");
   Serial.println(statusMessage);
-  Particle.publish("kb-status", statusMessage, PRIVATE);
+  lastConsolePublishMillis = millis();
 }
 
 void loop() {
-  unsigned long now = millis();
-  unsigned long delta = now - lastReportMillis;
+  checkForTcpClient();
 
-  if (delta < REPORT_INTERVAL_MILLIS) {
-    return;
+  if (client.connected()) {
+    if ((millis() - lastTcpPublishMillis) >= TCP_PUBLISH_INTERVAL_MILLIS) {
+      publishTcpStatus();
+    }
+  } else {
+    if ((millis() - lastCloudPublishMillis) >= CLOUD_PUBLISH_INTERVAL_MILLIS) {
+      publishCloudStatus();
+    }
   }
 
-  lastReportMillis = now;
-  publishStatus();
+  if ((millis() - lastConsolePublishMillis) >= CONSOLE_PUBLISH_INTERVAL_MILLIS) {
+    publishConsoleStatus();
+  }
+
 }
