@@ -53,3 +53,8 @@ as the TCP server.
 If there is no TCP client connected, the device will instead report status, up to once a second, to the Particle Cloud.
 
 Log in to the [Particle logs console](https://console.particle.io/logs) to see events.
+
+
+## License
+
+Offered free and open source under the MIT license. See `LICENSE.txt`.
