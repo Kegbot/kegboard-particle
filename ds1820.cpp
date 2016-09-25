@@ -19,9 +19,6 @@
  */
 
 #include <inttypes.h>
-#include <avr/io.h>
-
-#include "kegboard.h"
 #include "ds1820.h"
 #include "OneWire.h"
 
@@ -159,6 +156,25 @@ long DS1820Sensor::GetTemp(void)
   }
 }
 
+void DS1820Sensor::GetTempC(char* buf) {
+  if (!m_temp_is_valid) {
+    buf[0] = '\0';
+    return;
+  }
+
+  int temp = m_temp;
+  int temp_c;
+  if (temp & 0x8000) {
+    *buf = '-';
+    buf++;
+    temp = (temp ^ 0xffff) + 1;
+  }
+
+  temp_c = (6 * temp) + temp / 4;    // multiply by (100 * 0.0625) or 6.25
+  sprintf(buf, "%i.%i", temp_c/100, temp_c % 100);
+}
+
+
 bool DS1820Sensor::Busy() {
   return m_converting;
 }
@@ -178,4 +194,22 @@ void DS1820Sensor::PrintTemp(void)
 {
   long temp = GetTemp() / 1000000;
   Serial.print(temp);
+}
+
+static void byteToChars(uint8_t byte, char* out) {
+  for (int i=0; i<2; i++) {
+    uint8_t val = (byte >> (4*i)) & 0xf;
+    if (val < 10) {
+      out[1-i] = (char) ('0' + val);
+    } else if (val < 16) {
+      out[1-i] = (char) ('a' + (val - 10));
+    }
+  }
+}
+
+void DS1820Sensor::GetName(char* buf) {
+  buf[16] = '\0';
+  for (int i=7; i>=0; i--) {
+    byteToChars(m_addr[i], buf + (i * 2));
+  }
 }

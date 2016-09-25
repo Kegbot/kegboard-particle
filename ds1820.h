@@ -1,5 +1,3 @@
-#include <limits.h>
-
 #define ONEWIRE_FAMILY_DS18B20  0x28
 #define ONEWIRE_FAMILY_DS18S20  0x10
 #define INVALID_TEMPERATURE_VALUE INT_MIN
@@ -12,8 +10,11 @@ class DS1820Sensor {
    bool Update(unsigned long clock);
    void PrintTemp(void);
    long GetTemp();
+   void GetTempC(char* buf);
+   void GetName(char* buf);
    bool Busy();
    bool Initialized();
+   bool IsValid() { return m_temp_is_valid; }
    void Reset();
    int CompareId(uint8_t* other);
    void Initialize(OneWire* bus, uint8_t* addr);

@@ -22,6 +22,9 @@
  * SOFTWARE.
  */
 
+#include "OneWire.h"
+#include "ds1820.h"
+
 #define VERSION "0.1.0"
 
 #define CLOUD_PUBLISH_INTERVAL_MILLIS 1000
@@ -33,6 +36,8 @@
 #define METER1_PIN D2
 #define METER2_PIN D3
 #define METER3_PIN D4
+
+#define ONEWIRE_PIN D5
 
 #define TCP_SERVER_PORT 8321
 
@@ -53,6 +58,9 @@ typedef struct {
 } meter_t;
 
 meter_t meters[NUM_METERS];
+
+OneWire onewire = OneWire(ONEWIRE_PIN);
+DS1820Sensor thermoSensor = DS1820Sensor();
 
 #define CREATE_METER_ISR(METER_NUM) \
   void meter##METER_NUM##Interrupt(void) { \
@@ -99,6 +107,62 @@ int publicMeterTicks(String extra) {
   return (int) meters[meterNum].ticks;
 }
 
+int stepOnewireThermoBus() {
+  uint8_t addr[8];
+  unsigned long now = millis();
+
+  // Are we already working on a sensor? service it, possibly emitting a a
+  // thermo packet.
+  if (thermoSensor.Initialized() || thermoSensor.Busy()) {
+    if (thermoSensor.Update(now)) {
+      char buf[64];
+      char nameBuf[17];
+      // Just finished conversion
+      //writeThermoPacket(&gThermoSensor);
+      thermoSensor.GetTempC(buf);
+      thermoSensor.GetName(nameBuf);
+      if (buf[0] != '\0') {
+        Serial.print("THERMO id=");
+        Serial.print(nameBuf);
+        Serial.print(" temp_c=");
+        Serial.println(buf);
+      }
+      thermoSensor.Reset();
+    } else if (thermoSensor.Busy()) {
+      // More cycles needed on this sensor
+      return 1;
+    } else {
+      // finished or not started
+    }
+
+    // First time, or finished with last sensor; clean up, and look more more
+    // devices.
+    int more_search = onewire.search(addr);
+    if (!more_search) {
+      // Bus exhausted; start over
+      onewire.reset_search();
+      return 0;
+    }
+    // New sensor. Initialize and start work.
+    thermoSensor.Initialize(&onewire, addr);
+    thermoSensor.Update(now);
+    return 1;
+  }
+
+  // First time, or finished with last sensor; clean up, and look more more
+  // devices.
+  int more_search = onewire.search(addr);
+  if (!more_search) {
+    // Bus exhausted; start over
+    onewire.reset_search();
+    return 0;
+  }
+
+  // New sensor. Initialize and start work.
+  thermoSensor.Initialize(&onewire, addr);
+  thermoSensor.Update(now);
+  return 1;
+}
 void setup() {
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
@@ -183,6 +247,7 @@ void publishConsoleStatus() {
 
 void loop() {
   checkForTcpClient();
+  stepOnewireThermoBus();
 
   if (client.connected()) {
     if ((millis() - lastTcpPublishMillis) >= TCP_PUBLISH_INTERVAL_MILLIS) {
