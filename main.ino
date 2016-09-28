@@ -24,8 +24,10 @@
 
 #include "OneWire.h"
 #include "ds1820.h"
+#include "MFRC522.h"
 
-#define VERSION "0.1.0"
+// Bump VERSION to 0.2.0 for RFID support
+#define VERSION "0.2.0"
 
 #define CLOUD_PUBLISH_INTERVAL_MILLIS 1000
 #define TCP_PUBLISH_INTERVAL_MILLIS 250
@@ -38,6 +40,20 @@
 #define METER3_PIN D4
 
 #define ONEWIRE_PIN D5
+
+// Pins for RFID reader
+#define SS_PIN A2
+#define RST_PIN D7
+#define CARD_NOT_PRESENT_LIMIT 100
+#define RFID_CONNECTED true
+
+// RFID support variables
+MFRC522 mfrc522(SS_PIN, RST_PIN);	// Create MFRC522 instance.
+byte saveUid[10] = {0};
+int saveUidSize = 0;
+int notPresentCount = 0;
+String rfidMessage;
+bool rfidTcpSent, rfidPublishSent, rfidConsoleSent = true;
 
 #define TCP_SERVER_PORT 8321
 
@@ -163,6 +179,55 @@ int stepOnewireThermoBus() {
   thermoSensor.Update(now);
   return 1;
 }
+
+void checkRfidReader() {
+  // Look for new cards
+	if ( ! mfrc522.PICC_IsNewCardPresent()) {
+      // in testing, would randomly get false values immediately followed by true values
+      // CARD_NOT_PRESENT_LIMIT is a kludgy way to handle this, 10 was not enough and 100 seems
+      // to work and is still fast enough for human attention spans
+	    if (notPresentCount == CARD_NOT_PRESENT_LIMIT) {
+          // kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
+    	  rfidMessage = "rfidp.token=";
+          for (byte i = 0; i < saveUidSize; i++) {
+            //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+            rfidMessage.concat(String::format("%02X", saveUid[i]));
+          } 
+          rfidMessage.concat(String::format(" rfidp.status=removed ts=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+          rfidTcpSent = false;
+          rfidPublishSent = false;
+          rfidConsoleSent = false;
+	        memset (saveUid, 0, sizeof(saveUid));
+	        notPresentCount++;
+        } else {
+          notPresentCount++;
+        }
+		return;
+	}
+	
+	// Select one of the cards
+	if ( ! mfrc522.PICC_ReadCardSerial()) {
+	  // Serial.println("PICC_ReadCardSerial failed, card must be moving around or something!?!");
+		return;
+	}
+
+	notPresentCount = 0;
+  if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
+	  // kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
+	  rfidMessage = "rfidp.token=";
+	  for (byte i = 0; i < mfrc522.uid.size; i++) {
+		  //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+		  rfidMessage.concat(String::format("%02X", mfrc522.uid.uidByte[i]));
+	  } 
+   	rfidMessage.concat(String::format(" rfidp.status=present ts=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+   	rfidTcpSent = false;
+   	rfidPublishSent = false;
+   	rfidConsoleSent = false;
+	  memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
+  	saveUidSize = mfrc522.uid.size;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
@@ -175,6 +240,11 @@ void setup() {
   SETUP_METER(2);
   SETUP_METER(3);
 
+  if (RFID_CONNECTED) {
+    mfrc522.setSPIConfig();
+    mfrc522.PCD_Init();	// Init MFRC522 card
+  }
+  
   Particle.function("resetMeter", publicResetMeter);
   Particle.function("meterTicks", publicMeterTicks);
 }
@@ -202,11 +272,17 @@ void checkForTcpClient() {
 }
 
 void publishCloudStatus() {
+	if (!rfidPublishSent && rfidMessage.length()) {
+	  Particle.publish("kb-status", rfidMessage, PRIVATE);
+	  rfidPublishSent = true;
+	}
+
   if (!cloudPending) {
     return;
   }
-  cloudPending = 0;
 
+
+  cloudPending = 0;
   String statusMessage;
   getStatus(&statusMessage);
 
@@ -217,12 +293,18 @@ void publishCloudStatus() {
 }
 
 void publishTcpStatus() {
+  if (client.connected()) {
+		if (!rfidTcpSent && rfidMessage.length()) {
+		  client.print("kb-status: ");
+   	  client.println(rfidMessage);
+   	  rfidTcpSent = true;
+		}
+
   if (!tcpPending) {
     return;
   }
   tcpPending = 0;
 
-  if (client.connected()) {
     String statusMessage;
     getStatus(&statusMessage);
     client.print("kb-status: ");
@@ -232,6 +314,12 @@ void publishTcpStatus() {
 }
 
 void publishConsoleStatus() {
+  if (!rfidConsoleSent &&rfidMessage.length()) {
+	  Serial.print("kb-status: ");
+  	Serial.println(rfidMessage);
+  	rfidConsoleSent = true;
+  }
+
   if (!consolePending) {
     return;
   }
@@ -247,6 +335,7 @@ void publishConsoleStatus() {
 
 void loop() {
   checkForTcpClient();
+  if (RFID_CONNECTED) checkRfidReader();
   stepOnewireThermoBus();
 
   if (client.connected()) {
@@ -262,5 +351,4 @@ void loop() {
   if ((millis() - lastConsolePublishMillis) >= CONSOLE_PUBLISH_INTERVAL_MILLIS) {
     publishConsoleStatus();
   }
-
 }
