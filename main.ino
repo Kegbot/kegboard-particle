@@ -24,8 +24,10 @@
 
 #include "OneWire.h"
 #include "ds1820.h"
+#include "MFRC522/MFRC522.h"
 
-#define VERSION "0.1.0"
+// Bump VERSION to 0.2.0 for RFID support
+#define VERSION "0.2.0"
 
 #define CLOUD_PUBLISH_INTERVAL_MILLIS 1000
 #define TCP_PUBLISH_INTERVAL_MILLIS 250
@@ -38,6 +40,19 @@
 #define METER3_PIN D4
 
 #define ONEWIRE_PIN D5
+
+// Pins for RFID reader
+#define SS_PIN A2
+#define RST_PIN D7
+#define CARD_NOT_PRESENT_LIMIT 100
+#define RFID_CONNECTED true
+
+// RFID support variables
+MFRC522 mfrc522(SS_PIN, RST_PIN);	// Create MFRC522 instance.
+byte saveUid[10] = {0};
+int saveUidSize = 0;
+int notPresentCount = 0;
+String rfidMessage;
 
 #define TCP_SERVER_PORT 8321
 
@@ -163,6 +178,49 @@ int stepOnewireThermoBus() {
   thermoSensor.Update(now);
   return 1;
 }
+
+void checkRfidReader() {
+  rfidMessage = "";
+  // Look for new cards
+	if ( ! mfrc522.PICC_IsNewCardPresent()) {
+	    if (notPresentCount == CARD_NOT_PRESENT_LIMIT) {
+        // kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
+	      rfidMessage = "kb-status: rfidp.token=";
+        for (byte i = 0; i < saveUidsize; i++) {
+          //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+	  	    rfidMessage->concat(String::format("%02X", saveUid[i]);
+        } 
+        rfidMessage->concat(String::format(" rfidp.status=removed time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+	      memset (saveUid, 0, sizeof(saveUid));
+	      notPresentCount++;
+      } else {
+        notPresentCount++;
+    }
+		return;
+	}
+	
+	// Select one of the cards
+	if ( ! mfrc522.PICC_ReadCardSerial()) {
+	  // Serial.println("PICC_ReadCardSerial failed, card must be moving around or something!?!");
+		return;
+	}
+
+	notPresentCount = 0;
+  char hexByte[3] = {0};
+  if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
+	  // kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
+	  rfidMessage = "kb-status: rfidp.token=";
+	  for (byte i = 0; i < mfrc522.uid.size; i++) {
+      //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+	  	rfidMessage->concat(String::format("%02X", mfrc522.uid.uidbyte[i]);
+	  } 
+    rfidMessage->concat(String::format(" rfidp.status=present time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+	  Serial.println();
+	  memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
+    SaveUidSize = mfrc522.uid.size;
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
@@ -175,6 +233,11 @@ void setup() {
   SETUP_METER(2);
   SETUP_METER(3);
 
+  if (RFID_CONNECTED) {
+    mfrc522.setSPIConfig();
+    mfrc522.PCD_Init();	// Init MFRC522 card
+  }
+  
   Particle.function("resetMeter", publicResetMeter);
   Particle.function("meterTicks", publicMeterTicks);
 }
@@ -247,6 +310,7 @@ void publishConsoleStatus() {
 
 void loop() {
   checkForTcpClient();
+  if (RFID_CONNECTED) checkRfidReader();
   stepOnewireThermoBus();
 
   if (client.connected()) {
