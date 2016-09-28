@@ -24,7 +24,7 @@
 
 #include "OneWire.h"
 #include "ds1820.h"
-#include "MFRC522/MFRC522.h"
+#include "MFRC522.h"
 
 // Bump VERSION to 0.2.0 for RFID support
 #define VERSION "0.2.0"
@@ -184,18 +184,18 @@ void checkRfidReader() {
   // Look for new cards
 	if ( ! mfrc522.PICC_IsNewCardPresent()) {
 	    if (notPresentCount == CARD_NOT_PRESENT_LIMIT) {
-        // kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
-	      rfidMessage = "rfidp.token=";
-        for (byte i = 0; i < saveUidsize; i++) {
-          //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
-	  	    rfidMessage->concat(String::format("%02X", saveUid[i]);
-        } 
-        rfidMessage->concat(String::format(" rfidp.status=removed time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+          // kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
+    	  rfidMessage = "rfidp.token=";
+          for (byte i = 0; i < saveUidSize; i++) {
+            //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+            rfidMessage.concat(String::format("%02X", saveUid[i]));
+          } 
+          rfidMessage.concat(String::format(" rfidp.status=removed time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
 	      memset (saveUid, 0, sizeof(saveUid));
 	      notPresentCount++;
-      } else {
-        notPresentCount++;
-    }
+        } else {
+          notPresentCount++;
+        }
 		return;
 	}
 	
@@ -206,18 +206,17 @@ void checkRfidReader() {
 	}
 
 	notPresentCount = 0;
-  if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
+    if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
 	 	// kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
 	 	rfidMessage = "rfidp.token=";
 	 	for (byte i = 0; i < mfrc522.uid.size; i++) {
 			//sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
-	 		rfidMessage->concat(String::format("%02X", mfrc522.uid.uidbyte[i]);
+	 		rfidMessage.concat(String::format("%02X", mfrc522.uid.uidByte[i]));
 	 	} 
-   	rfidMessage->concat(String::format(" rfidp.status=present time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
-	 	Serial.println();
+    	rfidMessage.concat(String::format(" rfidp.status=present time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
 	 	memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
-   	SaveUidSize = mfrc522.uid.size;
-  }
+    	saveUidSize = mfrc522.uid.size;
+    }
 }
 
 void setup() {
