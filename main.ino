@@ -53,6 +53,7 @@ byte saveUid[10] = {0};
 int saveUidSize = 0;
 int notPresentCount = 0;
 String rfidMessage;
+bool rfidTcpSent, rfidPublishSent, rfidConsoleSent = true;
 
 #define TCP_SERVER_PORT 8321
 
@@ -180,7 +181,6 @@ int stepOnewireThermoBus() {
 }
 
 void checkRfidReader() {
-  rfidMessage = "";
   // Look for new cards
 	if ( ! mfrc522.PICC_IsNewCardPresent()) {
 	    if (notPresentCount == CARD_NOT_PRESENT_LIMIT) {
@@ -190,7 +190,10 @@ void checkRfidReader() {
             //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
             rfidMessage.concat(String::format("%02X", saveUid[i]));
           } 
-          rfidMessage.concat(String::format(" rfidp.status=removed time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+          rfidMessage.concat(String::format(" rfidp.status=removed ts=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+          rfidTcpSent = false;
+          rfidPublishSent = false;
+          rfidConsoleSent = false;
 	      memset (saveUid, 0, sizeof(saveUid));
 	      notPresentCount++;
         } else {
@@ -213,7 +216,10 @@ void checkRfidReader() {
 			//sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
 	 		rfidMessage.concat(String::format("%02X", mfrc522.uid.uidByte[i]));
 	 	} 
-    	rfidMessage.concat(String::format(" rfidp.status=present time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+    	rfidMessage.concat(String::format(" rfidp.status=present ts=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+    	rfidTcpSent = false;
+    	rfidPublishSent = false;
+    	rfidConsoleSent = false;
 	 	memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
     	saveUidSize = mfrc522.uid.size;
     }
@@ -263,13 +269,17 @@ void checkForTcpClient() {
 }
 
 void publishCloudStatus() {
+	if (!rfidPublishSent && rfidMessage.length()) {
+	  Particle.publish("kb-status", rfidMessage, PRIVATE);
+	  rfidPublishSent = true;
+	}
+
   if (!cloudPending) {
     return;
   }
+
+
   cloudPending = 0;
-
-	if (rfidMessage.length()) Particle.publish("kb-status", rfidMessage, PRIVATE);
-
   String statusMessage;
   getStatus(&statusMessage);
 
@@ -280,16 +290,17 @@ void publishCloudStatus() {
 }
 
 void publishTcpStatus() {
+  if (client.connected()) {
+		if (!rfidTcpSent && rfidMessage.length()) {
+		  client.print("kb-status: ");
+    	  client.println(rfidMessage);
+    	  rfidTcpSent = true;
+		}
+
   if (!tcpPending) {
     return;
   }
   tcpPending = 0;
-
-  if (client.connected()) {
-		if (rfidMessage.length()) {
-			client.print("kb-status: ");
-    	client.println(rfidMessage);
-		}
 
     String statusMessage;
     getStatus(&statusMessage);
@@ -300,15 +311,16 @@ void publishTcpStatus() {
 }
 
 void publishConsoleStatus() {
+  if (!rfidConsoleSent &&rfidMessage.length()) {
+	Serial.print("kb-status: ");
+  	Serial.println(rfidMessage);
+  	rfidConsoleSent = true;
+  }
+
   if (!consolePending) {
     return;
   }
   consolePending = 0;
-
-  if (rfidMessage.length()) {
-		Serial.print("kb-status: ");
-  	Serial.println(rfidMessage);
-	}
 
   String statusMessage;
   getStatus(&statusMessage);
@@ -336,5 +348,4 @@ void loop() {
   if ((millis() - lastConsolePublishMillis) >= CONSOLE_PUBLISH_INTERVAL_MILLIS) {
     publishConsoleStatus();
   }
-
 }
