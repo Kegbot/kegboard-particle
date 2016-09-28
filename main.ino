@@ -183,6 +183,9 @@ int stepOnewireThermoBus() {
 void checkRfidReader() {
   // Look for new cards
 	if ( ! mfrc522.PICC_IsNewCardPresent()) {
+      // in testing, would randomly get false values immediately followed by true values
+      // CARD_NOT_PRESENT_LIMIT is a kludgy way to handle this, 10 was not enough and 100 seems
+      // to work and is still fast enough for human attention spans
 	    if (notPresentCount == CARD_NOT_PRESENT_LIMIT) {
           // kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
     	  rfidMessage = "rfidp.token=";
@@ -194,8 +197,8 @@ void checkRfidReader() {
           rfidTcpSent = false;
           rfidPublishSent = false;
           rfidConsoleSent = false;
-	      memset (saveUid, 0, sizeof(saveUid));
-	      notPresentCount++;
+	        memset (saveUid, 0, sizeof(saveUid));
+	        notPresentCount++;
         } else {
           notPresentCount++;
         }
@@ -209,20 +212,20 @@ void checkRfidReader() {
 	}
 
 	notPresentCount = 0;
-    if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
-	 	// kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
-	 	rfidMessage = "rfidp.token=";
-	 	for (byte i = 0; i < mfrc522.uid.size; i++) {
-			//sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
-	 		rfidMessage.concat(String::format("%02X", mfrc522.uid.uidByte[i]));
-	 	} 
-    	rfidMessage.concat(String::format(" rfidp.status=present ts=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
-    	rfidTcpSent = false;
-    	rfidPublishSent = false;
-    	rfidConsoleSent = false;
-	 	memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
-    	saveUidSize = mfrc522.uid.size;
-    }
+  if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
+	  // kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
+	  rfidMessage = "rfidp.token=";
+	  for (byte i = 0; i < mfrc522.uid.size; i++) {
+		  //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+		  rfidMessage.concat(String::format("%02X", mfrc522.uid.uidByte[i]));
+	  } 
+   	rfidMessage.concat(String::format(" rfidp.status=present ts=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+   	rfidTcpSent = false;
+   	rfidPublishSent = false;
+   	rfidConsoleSent = false;
+	  memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
+  	saveUidSize = mfrc522.uid.size;
+  }
 }
 
 void setup() {
@@ -293,8 +296,8 @@ void publishTcpStatus() {
   if (client.connected()) {
 		if (!rfidTcpSent && rfidMessage.length()) {
 		  client.print("kb-status: ");
-    	  client.println(rfidMessage);
-    	  rfidTcpSent = true;
+   	  client.println(rfidMessage);
+   	  rfidTcpSent = true;
 		}
 
   if (!tcpPending) {
@@ -312,7 +315,7 @@ void publishTcpStatus() {
 
 void publishConsoleStatus() {
   if (!rfidConsoleSent &&rfidMessage.length()) {
-	Serial.print("kb-status: ");
+	  Serial.print("kb-status: ");
   	Serial.println(rfidMessage);
   	rfidConsoleSent = true;
   }
