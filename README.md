@@ -19,6 +19,8 @@ The following pins are configured (all optional):
 * `D3` - Flow meter `meter2`
 * `D4` - Flow meter `meter3`
 * `D5` - OneWire DS1820 temperature sensor.
+* `A2` - RFID Reader (MFRC522)
+* `D7` - RFID Reset 
 
 Most flow meters, along with DS1820 temperature sensors, require a [pull-up resistor](https://learn.sparkfun.com/tutorials/pull-up-resistors) for proper operation. Consult hardware documentation.
 
@@ -32,22 +34,31 @@ There are three ways to read meter data from the device:
 
 ### TCP Interface
 
-The firmware runs a TCP server on port `8321` where meter readings are
-published. A single client at a time can connect to this port.
+The firmware runs a TCP server on port `8321` where meter readings and
+RFID present and RFID removed events are published. A single client at 
+a time can connect to this port.
 
 Example:
 
 ```
 $ telnet 192.168.1.7 8321
 info: kegboard-particle device_id=1234abcd1234abcd00001111 version=0.1.0
+kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
 kb-status: meter0.ticks=0 meter1.ticks=0 meter2.ticks=0 meter3.ticks=0
 kb-status: meter0.ticks=16 meter1.ticks=0 meter2.ticks=0 meter3.ticks=0
+kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
 ```
 
 ### Serial Interface
 
-Meter updates are also published on the serial port, in the same message format
-as the TCP server.
+Meter updates and RFID present and RFID removed eventsare also published on 
+the serial port, in the same message format as the TCP server.
+Currently, temperature reports are only published on the serial port, per 
+the following example:
+
+...
+THERMO id=1a2b3c4d5e6f7081  temp_c=12.34
+...
 
 ### Cloud Interface
 
