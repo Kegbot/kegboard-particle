@@ -185,7 +185,7 @@ void checkRfidReader() {
 	if ( ! mfrc522.PICC_IsNewCardPresent()) {
 	    if (notPresentCount == CARD_NOT_PRESENT_LIMIT) {
         // kb-status: rfidp.token=F1E2D3C4 rfidp.status=removed rfidp.ts=2016-09-26T13:16:15Z
-	      rfidMessage = "kb-status: rfidp.token=";
+	      rfidMessage = "rfidp.token=";
         for (byte i = 0; i < saveUidsize; i++) {
           //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
 	  	    rfidMessage->concat(String::format("%02X", saveUid[i]);
@@ -206,18 +206,17 @@ void checkRfidReader() {
 	}
 
 	notPresentCount = 0;
-  char hexByte[3] = {0};
   if (memcmp(mfrc522.uid.uidByte, saveUid, mfrc522.uid.size)) {
-	  // kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
-	  rfidMessage = "kb-status: rfidp.token=";
-	  for (byte i = 0; i < mfrc522.uid.size; i++) {
-      //sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
-	  	rfidMessage->concat(String::format("%02X", mfrc522.uid.uidbyte[i]);
-	  } 
-    rfidMessage->concat(String::format(" rfidp.status=present time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
-	  Serial.println();
-	  memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
-    SaveUidSize = mfrc522.uid.size;
+	 	// kb-status: rfidp.token=F1E2D3C4 rfidp.status=present rfidp.ts=2016-09-26T13:15:30Z
+	 	rfidMessage = "rfidp.token=";
+	 	for (byte i = 0; i < mfrc522.uid.size; i++) {
+			//sprintf(hexByte, "%02X", mfrc522.uid.uidbyte[i]);
+	 		rfidMessage->concat(String::format("%02X", mfrc522.uid.uidbyte[i]);
+	 	} 
+   	rfidMessage->concat(String::format(" rfidp.status=present time=%s ", Time.format(Time.local(), TIME_FORMAT_ISO8601_FULL).c_str()));
+	 	Serial.println();
+	 	memcpy( saveUid, mfrc522.uid.uidByte, mfrc522.uid.size);
+   	SaveUidSize = mfrc522.uid.size;
   }
 }
 
@@ -270,6 +269,8 @@ void publishCloudStatus() {
   }
   cloudPending = 0;
 
+	if (rfidMessage.length()) Particle.publish("kb-status", rfidMessage, PRIVATE);
+
   String statusMessage;
   getStatus(&statusMessage);
 
@@ -286,6 +287,11 @@ void publishTcpStatus() {
   tcpPending = 0;
 
   if (client.connected()) {
+		if (rfidMessage.length()) {
+			client.print("kb-status: ");
+    	client.println(rfidMessage);
+		}
+
     String statusMessage;
     getStatus(&statusMessage);
     client.print("kb-status: ");
@@ -299,6 +305,11 @@ void publishConsoleStatus() {
     return;
   }
   consolePending = 0;
+
+  if (rfidMessage.length()) {
+		Serial.print("kb-status: ");
+  	Serial.println(rfidMessage);
+	}
 
   String statusMessage;
   getStatus(&statusMessage);
