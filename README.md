@@ -6,6 +6,8 @@ Flow sensor controller firmware for [Particle](https://www.particle.io/)
 hardware. Provides meter readings over serial port and Wifi (Photon) or cellular
 (Electron) network connections.
 
+[![Build Status](https://travis-ci.org/Kegbot/kegboard-particle.svg?branch=master)](https://travis-ci.org/Kegbot/kegboard-particle)
+
 ## Build and Flash
 
 To build and flash your particle device, load the `main.ino` file into the [Particle IDE](https://build.particle.io/build) and flash it to your device. That's it!

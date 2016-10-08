@@ -1,0 +1,5 @@
+install:
+  - npm install -g particle-cli
+
+script:
+  - particle compile photon .
