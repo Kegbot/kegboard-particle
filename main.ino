@@ -25,17 +25,19 @@
 #include "OneWire.h"
 #include "ds1820.h"
 
-#define VERSION "0.1.0"
+#define VERSION "0.1.2"
 
 #define CLOUD_PUBLISH_INTERVAL_MILLIS 1000
 #define TCP_PUBLISH_INTERVAL_MILLIS 250
 #define CONSOLE_PUBLISH_INTERVAL_MILLIS 250
 
-#define NUM_METERS 4
-#define METER0_PIN D1
-#define METER1_PIN D2
-#define METER2_PIN D3
-#define METER3_PIN D4
+#define NUM_METERS 6
+#define METER0_PIN D0
+#define METER1_PIN D1
+#define METER2_PIN D2
+#define METER3_PIN D3
+#define METER4_PIN D4
+#define METER5_PIN D6
 
 #define ONEWIRE_PIN D5
 
@@ -81,6 +83,8 @@ CREATE_METER_ISR(0);
 CREATE_METER_ISR(1);
 CREATE_METER_ISR(2);
 CREATE_METER_ISR(3);
+CREATE_METER_ISR(4);
+CREATE_METER_ISR(5);
 
 //
 // Main program
@@ -126,6 +130,13 @@ int stepOnewireThermoBus() {
         Serial.print(nameBuf);
         Serial.print(" temp_c=");
         Serial.println(buf);
+
+        String statusMessage;
+        statusMessage = String::format("thermo-%s.temp=%s", nameBuf, buf);
+        Particle.publish("thermo-status", statusMessage, PRIVATE);
+
+        client.print("thermo-status: ");
+        client.println(statusMessage);
       }
       thermoSensor.Reset();
     } else if (thermoSensor.Busy()) {
@@ -163,6 +174,7 @@ int stepOnewireThermoBus() {
   thermoSensor.Update(now);
   return 1;
 }
+
 void setup() {
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
@@ -174,6 +186,8 @@ void setup() {
   SETUP_METER(1);
   SETUP_METER(2);
   SETUP_METER(3);
+  SETUP_METER(4);
+  SETUP_METER(5);
 
   Particle.function("resetMeter", publicResetMeter);
   Particle.function("meterTicks", publicMeterTicks);
