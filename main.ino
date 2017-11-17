@@ -134,7 +134,7 @@ int stepOnewireThermoBus() {
         String statusMessage;
         statusMessage = String::format("thermo-%s.temp=%s", nameBuf, buf);
         Particle.publish("thermo-status", statusMessage, PRIVATE);
-
+ 
         client.print("thermo-status: ");
         client.println(statusMessage);
       }
