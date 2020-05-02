@@ -43,7 +43,7 @@ kb-status: meter0.ticks=0 meter1.ticks=0 meter2.ticks=0 meter3.ticks=0
 kb-status: meter0.ticks=16 meter1.ticks=0 meter2.ticks=0 meter3.ticks=0
 ```
 
-#### Service Dsicovery with mDNS (Bonjour)
+#### Service Discovery with mDNS (Bonjour)
 
 The device will broadcast the mDNS hostname `kegboard`. On Mac OS X, you can typically locate the device with the hostname `kegboard.local` rather than by IP:
 
