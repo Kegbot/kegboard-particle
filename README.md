@@ -43,6 +43,18 @@ kb-status: meter0.ticks=0 meter1.ticks=0 meter2.ticks=0 meter3.ticks=0
 kb-status: meter0.ticks=16 meter1.ticks=0 meter2.ticks=0 meter3.ticks=0
 ```
 
+#### Service Dsicovery with mDNS (Bonjour)
+
+The device will broadcast the mDNS hostname `kegboard`. On Mac OS X, you can typically locate the device with the hostname `kegboard.local` rather than by IP:
+
+```
+$ telnet kegboard.local 8321
+Trying 192.168.86.100...
+Connected to kegboard.local.
+Escape character is '^]'.
+info: kegboard-particle device_id=3f0000000000000000000001 version=0.1.0
+```
+
 ### Serial Interface
 
 Meter updates are also published on the serial port, in the same message format
