@@ -36,8 +36,13 @@
 
 #define TCP_SERVER_PORT 8321
 
+#include "MDNS.h"
+
 TCPServer server = TCPServer(TCP_SERVER_PORT);
 TCPClient client;
+
+mdns::MDNS mdnsImpl;
+bool mdnsRunning = false;
 
 volatile unsigned int cloudPending;
 unsigned long lastCloudPublishMillis;
@@ -99,6 +104,17 @@ int publicMeterTicks(String extra) {
   return (int) meters[meterNum].ticks;
 }
 
+bool setupMdns() {
+  std::vector<String> subServices;
+  subServices.push_back("kegboard");
+
+  bool success = mdnsImpl.setHostname("kegboard") &&
+    mdnsImpl.addService("tcp", "kegboard", TCP_SERVER_PORT, "Kegboard") &&
+    mdnsImpl.begin(true);
+
+  return success;
+}
+
 void setup() {
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
@@ -113,6 +129,8 @@ void setup() {
 
   Particle.function("resetMeter", publicResetMeter);
   Particle.function("meterTicks", publicMeterTicks);
+
+  mdnsRunning = setupMdns();
 }
 
 void getStatus(String* statusMessage) {
@@ -183,6 +201,10 @@ void publishConsoleStatus() {
 
 void loop() {
   checkForTcpClient();
+
+  if (mdnsRunning) {
+    mdnsImpl.processQueries();
+  }
 
   if (client.connected()) {
     if ((millis() - lastTcpPublishMillis) >= TCP_PUBLISH_INTERVAL_MILLIS) {
