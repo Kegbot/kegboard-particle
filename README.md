@@ -12,14 +12,15 @@ To build and flash your particle device, load the `main.ino` file into the [Part
 
 ## Wiring
 
-The following pins are configured:
+The following pins are configured (all optional):
 
 * `D1` - Flow meter `meter0`
 * `D2` - Flow meter `meter1`
 * `D3` - Flow meter `meter2`
 * `D4` - Flow meter `meter3`
+* `D5` - OneWire DS1820 temperature sensor.
 
-Most flow meters require a [pull-up resistor](https://learn.sparkfun.com/tutorials/pull-up-resistors) for proper operation. Consult your meter's documentation.
+Most flow meters, along with DS1820 temperature sensors, require a [pull-up resistor](https://learn.sparkfun.com/tutorials/pull-up-resistors) for proper operation. Consult hardware documentation.
 
 ## Reading Data
 
