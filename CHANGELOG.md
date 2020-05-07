@@ -1,5 +1,9 @@
 # CHANGELOG
 
+## Version 0.3.0 (2020-05-06)
+
+* New feature: Temperature sensor support
+
 ## Version 0.2.1 (2020-05-02)
 
 * New feature: TCP watchdog feature
