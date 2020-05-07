@@ -44,6 +44,9 @@
 TCPServer server = TCPServer(TCP_SERVER_PORT);
 TCPClient client;
 
+volatile unsigned int meterPending;
+volatile unsigned int thermoPending;
+
 volatile unsigned int cloudPending;
 unsigned long lastCloudPublishMillis;
 
@@ -62,11 +65,18 @@ meter_t meters[NUM_METERS];
 OneWire onewire = OneWire(ONEWIRE_PIN);
 DS1820Sensor thermoSensor = DS1820Sensor();
 
+typedef struct {
+  float temp;
+  char probe[17];
+} temp_t;
+
+temp_t temps[NUM_METERS];
+
 #define CREATE_METER_ISR(METER_NUM) \
   void meter##METER_NUM##Interrupt(void) { \
     detachInterrupt(METER##METER_NUM##_PIN); \
     meters[METER_NUM].ticks++; \
-    cloudPending = consolePending = tcpPending = 1; \
+    cloudPending = consolePending = tcpPending = meterPending = 1; \
     attachInterrupt(METER##METER_NUM##_PIN, meter##METER_NUM##Interrupt, FALLING); \
   }
 
@@ -75,6 +85,11 @@ DS1820Sensor thermoSensor = DS1820Sensor();
     memset(&meters[METER_NUM], 0, sizeof(meter_t)); \
     pinMode(METER##METER_NUM##_PIN, INPUT_PULLUP); \
     attachInterrupt(METER##METER_NUM##_PIN, meter##METER_NUM##Interrupt, FALLING); \
+  } while (false)
+
+#define SETUP_TEMP(TEMP_NUM) \
+  do { \
+    memset(&temps[TEMP_NUM], 0, sizeof(temp_t)); \
   } while (false)
 
 CREATE_METER_ISR(0);
@@ -107,6 +122,23 @@ int publicMeterTicks(String extra) {
   return (int) meters[meterNum].ticks;
 }
 
+void addTemperature(char* probe, float temp) {
+  for (int i = 0; i < NUM_METERS; i++) {
+   if (strcmp(temps[i].probe, probe) == 0) {
+      temps[i].temp = temp;
+      return;
+    }
+  }
+  // New probe ID; Store it.
+  for (int i = 0; i < NUM_METERS; i++) {
+    if (temps[i].probe[0] == '\0') {
+      std::copy(probe, probe+17, temps[i].probe);
+      temps[i].temp = temp;
+      return;
+    }
+  }
+}
+
 int stepOnewireThermoBus() {
   uint8_t addr[8];
   unsigned long now = millis();
@@ -122,10 +154,8 @@ int stepOnewireThermoBus() {
       thermoSensor.GetTempC(buf);
       thermoSensor.GetName(nameBuf);
       if (buf[0] != '\0') {
-        Serial.print("THERMO id=");
-        Serial.print(nameBuf);
-        Serial.print(" temp_c=");
-        Serial.println(buf);
+        addTemperature(nameBuf,atof(buf));
+        cloudPending = consolePending = tcpPending = thermoPending = 1;
       }
       thermoSensor.Reset();
     } else if (thermoSensor.Busy()) {
@@ -163,6 +193,7 @@ int stepOnewireThermoBus() {
   thermoSensor.Update(now);
   return 1;
 }
+
 void setup() {
   Serial.begin(115200);
   Serial.print("start: kegboard-particle online, ip: ");
@@ -175,6 +206,11 @@ void setup() {
   SETUP_METER(2);
   SETUP_METER(3);
 
+  SETUP_TEMP(0);
+  SETUP_TEMP(1);
+  SETUP_TEMP(2);
+  SETUP_TEMP(3);
+
   Particle.function("resetMeter", publicResetMeter);
   Particle.function("meterTicks", publicMeterTicks);
 }
@@ -183,8 +219,15 @@ void getStatus(String* statusMessage) {
   for (int i = 0; i < NUM_METERS; i++) {
     meter_t *meter = &meters[i];
     unsigned int ticks = meter->ticks;
-
     statusMessage->concat(String::format("meter%i.ticks=%u ", i, ticks));
+  }
+}
+
+void getThermoStatus(String* statusMessage) {
+  for (int i = 0; i < NUM_METERS; i++) {
+    if (temps[i].probe[0] != '\0') {
+      statusMessage->concat(String::format("temp_%s.temp=%f ", temps[i].probe, temps[i].temp));
+    }
   }
 }
 
@@ -208,11 +251,20 @@ void publishCloudStatus() {
   cloudPending = 0;
 
   String statusMessage;
-  getStatus(&statusMessage);
-
-  bool published = Particle.publish("kb-status", statusMessage, PRIVATE);
-  if (published) {
-    lastCloudPublishMillis = millis();
+  if (meterPending) {
+    getStatus(&statusMessage);
+    bool published = Particle.publish("kb-status", statusMessage, PRIVATE);
+    if (published) {
+      lastCloudPublishMillis = millis();
+    }
+  }
+  if (thermoPending) {
+    statusMessage = "";
+    getThermoStatus(&statusMessage);
+    bool published = Particle.publish("kb-thermo", statusMessage, PRIVATE);
+    if (published) {
+      lastCloudPublishMillis = millis();
+    }
   }
 }
 
@@ -224,9 +276,16 @@ void publishTcpStatus() {
 
   if (client.connected()) {
     String statusMessage;
-    getStatus(&statusMessage);
-    client.print("kb-status: ");
-    client.println(statusMessage);
+    if (meterPending) {
+      getStatus(&statusMessage);
+      client.print("kb-status: ");
+      client.println(statusMessage);
+    }
+    if (thermoPending) {
+      getThermoStatus(&statusMessage);
+      client.print("kb-thermo: ");
+      client.println(statusMessage);
+    }
   }
   lastTcpPublishMillis = millis();
 }
@@ -238,10 +297,17 @@ void publishConsoleStatus() {
   consolePending = 0;
 
   String statusMessage;
-  getStatus(&statusMessage);
-
-  Serial.print("kb-status: ");
-  Serial.println(statusMessage);
+  if (meterPending) {
+    getStatus(&statusMessage);
+    Serial.print("kb-status: ");
+    Serial.println(statusMessage);
+  }
+  if (thermoPending) {
+    statusMessage = "";
+    getThermoStatus(&statusMessage);
+    Serial.print("kb-thermo: ");
+    Serial.println(statusMessage);
+  }
   lastConsolePublishMillis = millis();
 }
 
@@ -253,14 +319,13 @@ void loop() {
     if ((millis() - lastTcpPublishMillis) >= TCP_PUBLISH_INTERVAL_MILLIS) {
       publishTcpStatus();
     }
-  } else {
-    if ((millis() - lastCloudPublishMillis) >= CLOUD_PUBLISH_INTERVAL_MILLIS) {
-      publishCloudStatus();
-    }
+  }
+  if ((millis() - lastCloudPublishMillis) >= CLOUD_PUBLISH_INTERVAL_MILLIS) {
+    publishCloudStatus();
   }
 
   if ((millis() - lastConsolePublishMillis) >= CONSOLE_PUBLISH_INTERVAL_MILLIS) {
     publishConsoleStatus();
   }
-
+  meterPending = thermoPending = 0;
 }
