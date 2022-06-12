@@ -20,10 +20,12 @@
  * SOFTWARE.
  */
 
+SYSTEM_THREAD(ENABLED);
+
 #define VERSION "0.3.0"
 #define KEGBOARD_DEBUG 0
 
-#define CLOUD_PUBLISH_INTERVAL_MILLIS 1000
+#define CLOUD_PUBLISH_INTERVAL_MILLIS 10000
 #define TCP_PUBLISH_INTERVAL_MILLIS 250
 #define CONSOLE_PUBLISH_INTERVAL_MILLIS 250
 #define CLIENT_WATCHDOG_TIMEOUT_MILLIS 30000
@@ -46,6 +48,32 @@
 #include "MDNS.h"
 #include "OneWire.h"
 #include "ds1820.h"
+#include "KegboardPacket.h"
+
+#define FIRMWARE_VERSION 18
+#define SERIAL_NUMBER_SIZE_BYTES 30
+static uint8_t gSerialNumber[SERIAL_NUMBER_SIZE_BYTES] = { 75,66,45,48,48,48,48,45,48,48,48,48,45,48,48,48,51,49,51,51,55,0 };
+// Structure to keep information about this device's uptime.
+typedef struct {
+  unsigned long uptime_ms;
+  unsigned long uptime_days;
+  unsigned long last_uptime_ms;
+  unsigned long last_meter_event;
+  unsigned long last_heartbeat;
+} UptimeStat;
+
+static UptimeStat gUptimeStat;
+
+static KegboardPacket gInputPacket;
+
+// Structure that holds the state of incoming serial bytes.
+typedef struct {
+  uint8_t header_bytes_read;
+  uint8_t payload_bytes_remain;
+  bool have_packet;
+} RxPacketStat;
+
+static RxPacketStat gPacketStat;
 
 #if KEGBOARD_DEBUG
 SerialLogHandler logHandler;
@@ -256,10 +284,7 @@ int stepOnewireThermoBus() {
 }
 
 void setup() {
-  Log.info("Starting setup ...");
   Serial.begin(115200);
-  Serial.print("start: kegboard-particle online, ip: ");
-  Serial.println(WiFi.localIP());
 
   server.begin();
 
@@ -277,6 +302,9 @@ void setup() {
   Particle.function("meterTicks", publicMeterTicks);
 
   mdnsRunning = setupMdns();
+
+  memset(&gUptimeStat, 0, sizeof(UptimeStat));
+  memset(&gPacketStat, 0, sizeof(RxPacketStat));
 }
 
 void getStatus(String* statusMessage) {
@@ -429,22 +457,231 @@ void publishConsoleStatus() {
   }
   consolePending = 0;
 
-  String statusMessage;
   if (meterPending) {
-    getStatus(&statusMessage);
-    Serial.print("kb-status: ");
-    Serial.println(statusMessage);
+    writeMeterPacket(0);
   }
   if (thermoPending) {
-    statusMessage = "";
-    getThermoStatus(&statusMessage);
-    Serial.print("kb-thermo: ");
-    Serial.println(statusMessage);
+    for (int i = 0; i < NUM_METERS; i++) {
+      if (temps[i].probe[0] != '\0') {
+        writeThermoPacket(temps[i].probe, temps[i].temp);
+      }
+    }
   }
   lastConsolePublishMillis = millis();
 }
 
+void writeHelloPacket()
+{
+  int firmware_version = FIRMWARE_VERSION;
+  KegboardPacket packet;
+  packet.SetType(KBM_HELLO_ID);
+  packet.AddTag(KBM_HELLO_TAG_FIRMWARE_VERSION, sizeof(firmware_version), (char*)&firmware_version);
+  packet.AddTag(KBM_HELLO_TAG_SERIAL_NUMBER, SERIAL_NUMBER_SIZE_BYTES, (char*)gSerialNumber);
+  packet.AddTag(KBM_HELLO_TAG_UPTIME_MILLIS, sizeof(gUptimeStat.uptime_ms), (char*)&gUptimeStat.uptime_ms);
+  packet.AddTag(KBM_HELLO_TAG_UPTIME_DAYS, sizeof(gUptimeStat.uptime_days), (char*)&gUptimeStat.uptime_days);
+  packet.Print();
+}
+
+void writeThermoPacket(char* name, long temp)
+{
+  char thermo_name[23] = "thermo-";
+  strcat(thermo_name, name);
+  KegboardPacket packet;
+  packet.SetType(KBM_THERMO_READING);
+  packet.AddTag(KBM_THERMO_READING_TAG_SENSOR_NAME, 23, thermo_name);
+  packet.AddTag(KBM_THERMO_READING_TAG_SENSOR_READING, sizeof(temp), (char*)(&temp));
+  packet.Print();
+}
+
+void writeMeterPacket(int channel)
+{
+  char name[5] = "flow";
+  meter_t *meter = &meters[channel];
+  unsigned int ticks = meter->ticks;
+
+  if (ticks <= 0) {
+    return;
+  }
+
+  name[4] = 0x30 + channel;
+  KegboardPacket packet;
+  packet.SetType(KBM_METER_STATUS);
+  packet.AddTag(KBM_METER_STATUS_TAG_METER_NAME, 5, name);
+  packet.AddTag(KBM_METER_STATUS_TAG_METER_READING, sizeof(ticks), (char*)(&ticks));
+  packet.Print();
+}
+
+void updateTimekeeping() {
+  // TODO(mikey): it would be more efficient to take control of timer0
+  unsigned long now = millis();
+  gUptimeStat.uptime_ms += now - gUptimeStat.last_uptime_ms;
+  gUptimeStat.last_uptime_ms = now;
+
+  if (gUptimeStat.uptime_ms >= MS_PER_DAY) {
+    gUptimeStat.uptime_days += 1;
+    gUptimeStat.uptime_ms -= MS_PER_DAY;
+  }
+
+  if ((now - gUptimeStat.last_heartbeat) > KB_HEARTBEAT_INTERVAL_MS) {
+    gUptimeStat.last_heartbeat = now;
+    writeHelloPacket();
+  }
+}
+
+static void readSerialBytes(char *dest_buf, int num_bytes, int offset) {
+  while (num_bytes-- != 0) {
+    dest_buf[offset++] = Serial.read();
+  }
+}
+
+void resetInputPacket() {
+  memset(&gPacketStat, 0, sizeof(RxPacketStat));
+  gInputPacket.Reset();
+}
+
+void readIncomingSerialData() {
+  char serial_buf[KBSP_PAYLOAD_MAXLEN];
+  volatile uint8_t bytes_available = Serial.available();
+
+  // Do not read a new packet if we have one awiting processing.  This should
+  // never happen.
+  if (gPacketStat.have_packet) {
+    return;
+  }
+
+  // Look for a new packet.
+  if (gPacketStat.header_bytes_read < KBSP_HEADER_PREFIX_LEN) {
+    while (bytes_available > 0) {
+      char next_char = Serial.read();
+      bytes_available -= 1;
+
+      if (next_char == KBSP_PREFIX[gPacketStat.header_bytes_read]) {
+        gPacketStat.header_bytes_read++;
+        if (gPacketStat.header_bytes_read == KBSP_HEADER_PREFIX_LEN) {
+          // Found start of packet, break.
+          break;
+        }
+      } else {
+        // Wrong character in prefix; reset framing.
+        if (next_char == KBSP_PREFIX[0]) {
+          gPacketStat.header_bytes_read = 1;
+        } else {
+          gPacketStat.header_bytes_read = 0;
+        }
+      }
+    }
+  }
+
+  // Read the remainder of the header, if not yet found.
+  if (gPacketStat.header_bytes_read < KBSP_HEADER_LEN) {
+    if (bytes_available < 4) {
+      return;
+    }
+    gInputPacket.SetType(Serial.read() | (Serial.read() << 8));
+    gPacketStat.payload_bytes_remain = Serial.read() | (Serial.read() << 8);
+    bytes_available -= 4;
+    gPacketStat.header_bytes_read += 4;
+
+    // Check that the 'len' field is not bogus. If it is, throw out the packet
+    // and reset.
+    if (gPacketStat.payload_bytes_remain > KBSP_PAYLOAD_MAXLEN) {
+      goto out_reset;
+    }
+  }
+
+  // If we haven't yet found a frame, or there are no more bytes to read after
+  // finding a frame, bail out.
+  if (bytes_available == 0 || (gPacketStat.header_bytes_read < KBSP_HEADER_LEN)) {
+    return;
+  }
+
+  // TODO(mikey): Just read directly into KegboardPacket.
+  if (gPacketStat.payload_bytes_remain) {
+    int bytes_to_read = (gPacketStat.payload_bytes_remain >= bytes_available) ?
+        bytes_available : gPacketStat.payload_bytes_remain;
+    readSerialBytes(serial_buf, bytes_to_read, 0);
+    gInputPacket.AppendBytes(serial_buf, bytes_to_read);
+    gPacketStat.payload_bytes_remain -= bytes_to_read;
+    bytes_available -= bytes_to_read;
+  }
+
+  // Need more payload bytes than are now available.
+  if (gPacketStat.payload_bytes_remain > 0) {
+    return;
+  }
+
+  // We have a complete payload. Now grab the footer.
+  if (!gPacketStat.have_packet) {
+    if (bytes_available < KBSP_FOOTER_LEN) {
+      return;
+    }
+    readSerialBytes(serial_buf, KBSP_FOOTER_LEN, 0);
+
+    // Check CRC
+
+    // Check trailer
+    if (strncmp((serial_buf + 2), KBSP_TRAILER, KBSP_FOOTER_TRAILER_LEN)) {
+      goto out_reset;
+    }
+    gPacketStat.have_packet = true;
+  }
+
+  // Done!
+  return;
+
+out_reset:
+  resetInputPacket();
+}
+
+void handleInputPacket() {
+  if (!gPacketStat.have_packet) {
+    return;
+  }
+
+  // Process the input packet.
+  switch (gInputPacket.GetType()) {
+    case KBM_PING:
+#if KB_ENABLE_BUZZER
+      play_notes(PING_MELODY, KB_PIN_BUZZER);
+#endif
+      writeHelloPacket();
+      break;
+
+    case KBM_SET_OUTPUT: {
+      uint8_t id, mode;
+
+      if (!gInputPacket.ReadTag(KBM_SET_OUTPUT_TAG_OUTPUT_ID, &id)
+          || !gInputPacket.ReadTag(KBM_SET_OUTPUT_TAG_OUTPUT_MODE, &mode)) {
+        break;
+      }
+
+      break;
+    }
+
+    case KBM_SET_SERIAL_NUMBER: {
+      // Serial number can only be set if not already set.
+      if (true) {
+        break;
+      }
+
+      if (gInputPacket.FindTagLength(KBM_SET_SERIAL_NUMBER_TAG_SERIAL) >= SERIAL_NUMBER_SIZE_BYTES) {
+        break;
+      }
+
+      memset(gSerialNumber, 0, SERIAL_NUMBER_SIZE_BYTES);
+      gInputPacket.CopyTagData(KBM_SET_SERIAL_NUMBER_TAG_SERIAL, gSerialNumber);
+      writeHelloPacket();
+
+      break;
+    }
+  }
+  resetInputPacket();
+}
+
 void loop() {
+  updateTimekeeping();
+  readIncomingSerialData();
+  handleInputPacket();
   checkClientWatchdog();
   checkAndServiceTcp();
   stepOnewireThermoBus();
